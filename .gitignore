@@ -1,0 +1,32 @@
+# Build output
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+
+# Generated files
+generated/
+
+# Binaries
+*.out
+*.app
+miniarena_server
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+robot/vendor/

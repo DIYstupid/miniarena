@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package miniarena;
+
+// ============================================================
+// Message Header
+// ============================================================
+
+message MessageHeader {
+  uint32 message_id       = 1;
+  uint64 sequence         = 2;
+  uint64 session_id       = 3;
+  int64  client_timestamp_ms = 4;
+}
+
+// ============================================================
+// Login
+// ============================================================
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  int32  error_code  = 1;
+  uint64 session_id  = 2;
+  uint64 player_id   = 3;
+  string error_msg   = 4;
+}
+
+// ============================================================
+// Heartbeat
+// ============================================================
+
+message HeartbeatRequest {
+  uint64 client_time_ms = 1;
+}
+
+message HeartbeatResponse {
+  uint64 server_time_ms = 1;
+}
+
+// ============================================================
+// Match
+// ============================================================
+
+message MatchStartRequest {
+  int32 mode = 1;
+}
+
+message MatchStartResponse {
+  int32  error_code = 1;
+  string error_msg  = 2;
+}
+
+message MatchCancelRequest {}
+
+message MatchSuccessNotify {
+  uint64 room_id     = 1;
+  string server_addr = 2;
+}
+
+// ============================================================
+// Room
+// ============================================================
+
+message EnterRoomRequest {
+  uint64 room_id    = 1;
+  uint64 session_id = 2;
+}
+
+message EnterRoomResponse {
+  int32  error_code = 1;
+  string error_msg  = 2;
+  uint64 room_id    = 3;
+}
+
+message PlayerReadyRequest {}
+
+message BattleStartNotify {
+  uint64 room_id = 1;
+  int32  countdown_ms = 2;
+}
+
+// ============================================================
+// Battle Commands
+// ============================================================
+
+message PlayerMoveRequest {
+  float direction_x = 1;
+  float direction_y = 2;
+}
+
+message PlayerAttackRequest {
+  uint64 target_id = 1;
+}
+
+message PlayerSkillRequest {
+  int32  skill_id  = 1;
+  uint64 target_id = 2;
+  float  target_x  = 3;
+  float  target_y  = 4;
+}
+
+// ============================================================
+// Battle State
+// ============================================================
+
+message PlayerState {
+  uint64 player_id   = 1;
+  float  position_x  = 2;
+  float  position_y  = 3;
+  float  direction_x = 4;
+  float  direction_y = 5;
+  int32  hp          = 6;
+  int32  max_hp      = 7;
+  bool   alive       = 8;
+}
+
+message BattleStateNotify {
+  uint64 room_id                = 1;
+  uint64 tick                   = 2;
+  repeated PlayerState players  = 3;
+}
+
+message PlayerDeathNotify {
+  uint64 player_id   = 1;
+  uint64 killer_id   = 2;
+  int32  death_count = 3;
+}
+
+// ============================================================
+// Reconnect
+// ============================================================
+
+message ReconnectRequest {
+  uint64 session_id = 1;
+  uint64 player_id  = 2;
+  uint64 room_id    = 3;
+}
+
+message ReconnectResponse {
+  int32  error_code = 1;
+  string error_msg  = 2;
+}
+
+message BattleSnapshotNotify {
+  uint64 room_id                = 1;
+  uint64 current_tick           = 2;
+  repeated PlayerState players  = 3;
+}
+
+// ============================================================
+// Settlement
+// ============================================================
+
+message BattleEndNotify {
+  uint64 room_id       = 1;
+  int32  duration_sec  = 2;
+}
+
+message BattleSettlementNotify {
+  uint64 player_id     = 1;
+  int32  kills         = 2;
+  int32  deaths        = 3;
+  int32  damage_dealt  = 4;
+  int32  damage_taken  = 5;
+  int32  rank          = 6;
+}
