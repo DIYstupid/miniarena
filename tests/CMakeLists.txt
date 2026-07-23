@@ -109,3 +109,53 @@ add_executable(smoke_1000
 target_link_libraries(smoke_1000 PRIVATE
     miniarena_network
 )
+
+# Redis client test
+add_executable(test_redis_client
+    test_redis_client.cpp
+)
+target_link_libraries(test_redis_client PRIVATE
+    miniarena_storage
+    gtest_main
+)
+add_test(NAME RedisClient COMMAND test_redis_client)
+
+# MySQL client test
+add_executable(test_mysql_client
+    test_mysql_client.cpp
+)
+target_link_libraries(test_mysql_client PRIVATE
+    miniarena_storage
+    gtest_main
+)
+add_test(NAME MysqlClient COMMAND test_mysql_client)
+
+# Session manager test
+add_executable(test_session_manager
+    test_session_manager.cpp
+)
+target_link_libraries(test_session_manager PRIVATE
+    miniarena_game
+    gtest_main
+)
+add_test(NAME SessionManager COMMAND test_session_manager)
+
+# Room test
+add_executable(test_room
+    test_room.cpp
+)
+target_link_libraries(test_room PRIVATE
+    miniarena_game
+    gtest_main
+)
+add_test(NAME Room COMMAND test_room)
+
+# Match manager test
+add_executable(test_match_manager
+    test_match_manager.cpp
+)
+target_link_libraries(test_match_manager PRIVATE
+    miniarena_game
+    gtest_main
+)
+add_test(NAME MatchManager COMMAND test_match_manager)
