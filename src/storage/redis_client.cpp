@@ -11,6 +11,7 @@ RedisClient::~RedisClient() {
 }
 
 bool RedisClient::connect(const std::string& host, int port) {
+    std::lock_guard<std::mutex> lock(mtx_);
     ctx_ = redisConnect(host.c_str(), port);
     if (!ctx_ || ctx_->err) {
         spdlog::error("Redis connect failed: {}",
@@ -23,6 +24,7 @@ bool RedisClient::connect(const std::string& host, int port) {
 }
 
 void RedisClient::close() {
+    std::lock_guard<std::mutex> lock(mtx_);
     if (ctx_) {
         redisFree(ctx_);
         ctx_ = nullptr;
@@ -54,12 +56,14 @@ std::string RedisClient::makeKey(const std::string& prefix, uint64_t id) {
 // ---- Generic ops ----
 
 bool RedisClient::set(const std::string& key, const std::string& value) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(
         redisCommand(ctx_, "SET %s %b", key.c_str(), value.data(), value.size()));
     return checkReply(reply);
 }
 
 bool RedisClient::setEx(const std::string& key, int ttl_sec, const std::string& value) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(
         redisCommand(ctx_, "SETEX %s %d %b", key.c_str(), ttl_sec,
                      value.data(), value.size()));
@@ -79,17 +83,20 @@ std::optional<std::string> RedisClient::get(const std::string& key) {
 }
 
 bool RedisClient::del(const std::string& key) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "DEL %s", key.c_str()));
     return checkReply(reply, REDIS_REPLY_INTEGER);
 }
 
 bool RedisClient::expire(const std::string& key, int ttl_sec) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(
         redisCommand(ctx_, "EXPIRE %s %d", key.c_str(), ttl_sec));
     return checkReply(reply, REDIS_REPLY_INTEGER);
 }
 
 bool RedisClient::exists(const std::string& key) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "EXISTS %s", key.c_str()));
     if (!reply) return false;
     bool ok = (reply->type == REDIS_REPLY_INTEGER && reply->integer > 0);
@@ -100,6 +107,7 @@ bool RedisClient::exists(const std::string& key) {
 // ---- List ops ----
 
 int64_t RedisClient::lpush(const std::string& key, const std::string& value) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(
         redisCommand(ctx_, "LPUSH %s %b", key.c_str(), value.data(), value.size()));
     if (!reply || reply->type != REDIS_REPLY_INTEGER) {
@@ -125,6 +133,7 @@ std::optional<std::string> RedisClient::brpop(const std::string& key, int timeou
 }
 
 int64_t RedisClient::llen(const std::string& key) {
+    std::lock_guard<std::mutex> lock(mtx_);
     auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "LLEN %s", key.c_str()));
     if (!reply || reply->type != REDIS_REPLY_INTEGER) {
         if (reply) freeReplyObject(reply);
@@ -138,6 +147,7 @@ int64_t RedisClient::llen(const std::string& key) {
 // ---- Domain helpers ----
 
 void RedisClient::setSession(uint64_t session_id, const std::string& data, int ttl_sec) {
+    std::lock_guard<std::mutex> lock(mtx_);
     setEx(makeKey("session", session_id), ttl_sec, data);
 }
 
@@ -146,10 +156,12 @@ std::optional<std::string> RedisClient::getSession(uint64_t session_id) {
 }
 
 void RedisClient::delSession(uint64_t session_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
     del(makeKey("session", session_id));
 }
 
 void RedisClient::setOnline(uint64_t player_id, uint64_t session_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
     setEx(makeKey("online", player_id), 3600, std::to_string(session_id));
 }
 
@@ -160,10 +172,12 @@ std::optional<uint64_t> RedisClient::getOnline(uint64_t player_id) {
 }
 
 void RedisClient::delOnline(uint64_t player_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
     del(makeKey("online", player_id));
 }
 
 void RedisClient::pushMatchQueue(int mode, uint64_t player_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
     lpush(makeKey("match_queue", mode), std::to_string(player_id));
 }
 
@@ -178,6 +192,7 @@ int RedisClient::matchQueueSize(int mode) {
 }
 
 void RedisClient::setRoomRoute(uint64_t room_id, const std::string& addr) {
+    std::lock_guard<std::mutex> lock(mtx_);
     setEx(makeKey("room", room_id), 3600, addr);
 }
 
@@ -186,6 +201,7 @@ std::optional<std::string> RedisClient::getRoomRoute(uint64_t room_id) {
 }
 
 void RedisClient::delRoomRoute(uint64_t room_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
     del(makeKey("room", room_id));
 }
 

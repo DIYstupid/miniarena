@@ -10,7 +10,7 @@ void signalHandler(int) {
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::warn);
     spdlog::info("MiniArena Server starting...");
     spdlog::info("Build: {} {}", __DATE__, __TIME__);
 

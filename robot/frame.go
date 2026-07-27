@@ -136,6 +136,15 @@ func parseVarint(payload []byte, pos int) (uint64, int) {
 	return v, pos
 }
 
+// encodeVarint writes a protobuf varint to buf and returns the new buffer.
+func encodeVarint(buf []byte, v uint64) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v&0x7F)|0x80)
+		v >>= 7
+	}
+	return append(buf, byte(v))
+}
+
 // GetErrorCode extracts error_code from a protobuf payload.
 // Proto3 omits default values (0), so absence means success.
 func GetErrorCode(payload []byte) int32 {

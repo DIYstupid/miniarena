@@ -73,9 +73,7 @@ func (b *Bot) Run(serverAddr string) error {
 	if err := b.doMatch(); err != nil {
 		return fmt.Errorf("match: %w", err)
 	}
-	if err := b.doEnterRoom(); err != nil {
-		return fmt.Errorf("room: %w", err)
-	}
+	// doEnterRoom is not needed: MatchManager.tryMatch auto-adds players to room
 	if err := b.doReady(); err != nil {
 		return fmt.Errorf("ready: %w", err)
 	}
@@ -134,6 +132,8 @@ func (b *Bot) doMatch() error {
 		return err
 	}
 	b.roomID = GetRoomID(f2.Payload)
+	// Players are auto-added to the room by MatchManager.tryMatch
+	b.stats.RoomOK.Add(1)
 	return nil
 }
 
@@ -144,9 +144,11 @@ func (b *Bot) doEnterRoom() error {
 	}
 	f, err := DiscardUntil(&b.reader, b.conn, MsgEnterRoomResponse)
 	if err != nil {
-		return err
+		return fmt.Errorf("enter room: %w", err)
 	}
-	if code := GetErrorCode(f.Payload); code != 0 {
+	code := GetErrorCode(f.Payload)
+	if code != 0 {
+		b.stats.MatchFail.Add(1)
 		return fmt.Errorf("enter room error=%d", code)
 	}
 	b.stats.RoomOK.Add(1)
@@ -239,9 +241,11 @@ func encodeLoginRequest(username, password string) []byte {
 }
 
 func encodeEnterRoomRequest(roomID, sessionID uint64) []byte {
-	buf := make([]byte, 0, 32)
-	buf = append(buf, 0x08, byte(roomID))
-	buf = append(buf, 0x10, byte(sessionID))
+	var buf []byte
+	buf = append(buf, 0x08)
+	buf = encodeVarint(buf, roomID)
+	buf = append(buf, 0x10)
+	buf = encodeVarint(buf, sessionID)
 	return buf
 }
 
@@ -255,9 +259,15 @@ func encodeMoveRequest(dirX, dirY float32) []byte {
 }
 
 func encodeAttackRequest(targetID uint64) []byte {
-	return []byte{0x08, byte(targetID)}
+	var buf []byte
+	buf = append(buf, 0x08)
+	return encodeVarint(buf, targetID)
 }
 
 func encodeSkillRequest(skillID int32, targetID uint64) []byte {
-	return []byte{0x08, byte(skillID), 0x10, byte(targetID)}
+	var buf []byte
+	buf = append(buf, 0x08)
+	buf = encodeVarint(buf, uint64(skillID))
+	buf = append(buf, 0x10)
+	return encodeVarint(buf, targetID)
 }

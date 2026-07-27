@@ -5,6 +5,7 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <mutex>
 
 namespace miniarena {
 
@@ -54,7 +55,8 @@ public:
     std::optional<std::string> getRoomRoute(uint64_t room_id);
     void delRoomRoute(uint64_t room_id);
 
-private:
+    mutable std::mutex mtx_;
+
     bool checkReply(redisReply* reply, int expected_type = REDIS_REPLY_STATUS);
     std::string makeKey(const std::string& prefix, uint64_t id);
 

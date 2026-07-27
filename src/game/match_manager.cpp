@@ -36,7 +36,6 @@ int MatchManager::leaveQueue(PlayerId player_id) {
 RoomId MatchManager::tryMatch(int mode) {
     int count = redis_->matchQueueSize(mode);
     if (count < room_size_) return 0;
-
     // Create room
     RoomId room_id = rooms_->createRoom(room_size_);
     spdlog::info("Match formed: room {} with {} players", room_id, room_size_);

@@ -99,9 +99,12 @@ func (c *Controller) Run(duration time.Duration) {
 		time.Sleep(delay)
 	}
 
-	// Monitor progress
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -119,7 +122,7 @@ func (c *Controller) Run(duration time.Duration) {
 		case <-done:
 			c.PrintReport()
 			return
-		case <-time.After(duration):
+		case <-timer.C:
 			c.PrintReport()
 			return
 		}

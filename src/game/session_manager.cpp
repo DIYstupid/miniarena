@@ -43,7 +43,7 @@ void SessionManager::kickDuplicate(PlayerId player_id) {
 LoginResult SessionManager::login(ConnectionId conn_id,
                                    const std::string& username,
                                    const std::string& password) {
-    spdlog::info("SessionManager::login: conn={} user={}", conn_id, username);
+    // silent in production
     LoginResult result;
 
     auto player = mysql_->getPlayer(username);
@@ -95,7 +95,7 @@ LoginResult SessionManager::login(ConnectionId conn_id,
     // 7. Record login
     mysql_->recordLogin(player->id);
 
-    spdlog::info("Player {} ({}) logged in, session={}", player->username, player->id, sid);
+    // silent in production
 
     result.error_code = 0;
     result.session_id = sid;
