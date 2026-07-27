@@ -159,3 +159,28 @@ target_link_libraries(test_match_manager PRIVATE
     gtest_main
 )
 add_test(NAME MatchManager COMMAND test_match_manager)
+
+# P4 tests
+add_executable(test_command_queue
+    test_command_queue.cpp
+)
+target_link_libraries(test_command_queue PRIVATE miniarena_game gtest_main)
+add_test(NAME CommandQueue COMMAND test_command_queue)
+
+add_executable(test_tick_engine
+    test_tick_engine.cpp
+)
+target_link_libraries(test_tick_engine PRIVATE miniarena_game gtest_main)
+add_test(NAME TickEngine COMMAND test_tick_engine)
+
+add_executable(test_aoi_grid
+    test_aoi_grid.cpp
+)
+target_link_libraries(test_aoi_grid PRIVATE miniarena_game gtest_main)
+add_test(NAME AoiGrid COMMAND test_aoi_grid)
+
+add_executable(test_broadcaster
+    test_broadcaster.cpp
+)
+target_link_libraries(test_broadcaster PRIVATE miniarena_game gtest_main)
+add_test(NAME Broadcaster COMMAND test_broadcaster)

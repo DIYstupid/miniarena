@@ -3,6 +3,8 @@
 #include "session_manager.h"
 #include "room_manager.h"
 #include "match_manager.h"
+#include "battle_manager.h"
+#include "logic_worker.h"
 #include "storage/mysql_client.h"
 #include "storage/redis_client.h"
 #include "network/event_loop.h"
@@ -67,11 +69,12 @@ void GameServer::initBusiness() {
     sessions_ = std::make_unique<SessionManager>(mysql_.get(), redis_.get());
     rooms_    = std::make_unique<RoomManager>();
     router_   = std::make_unique<MessageRouter>();
-
     matcher_  = std::make_unique<MatchManager>(
         rooms_.get(), sessions_.get(), redis_.get(), config_.match_room_size);
 
-    // Wire send callback: session → network layer
+    battle_mgr_ = std::make_unique<BattleManager>(2);  // 2 logic threads
+
+    // Wire send callback: session → network
     sessions_->setSendCallback([this](ConnectionId conn_id, uint32_t msg_id,
                                        const std::string& payload) {
         sendResponse(conn_id, msg_id, payload);
@@ -81,9 +84,14 @@ void GameServer::initBusiness() {
     matcher_->setNotifyCallback([this](PlayerId player_id, uint32_t msg_id,
                                         const std::string& payload) {
         auto* s = sessions_->getByPlayer(player_id);
-        if (s) {
-            sendResponse(s->conn_id, msg_id, payload);
-        }
+        if (s) sendResponse(s->conn_id, msg_id, payload);
+    });
+
+    // Wire battle send callback
+    battle_mgr_->setSendCallback([this](PlayerId player_id, uint32_t msg_id,
+                                         const std::string& payload) {
+        auto* s = sessions_->getByPlayer(player_id);
+        if (s) sendResponse(s->conn_id, msg_id, payload);
     });
 }
 
@@ -229,6 +237,7 @@ void GameServer::registerHandlers() {
         // If all ready, start battle
         if (room->allReady()) {
             room->startBattle();
+            battle_mgr_->startBattle(room, sessions_.get());
 
             miniarena::BattleStartNotify notify;
             notify.set_room_id(room->id());
@@ -243,6 +252,58 @@ void GameServer::registerHandlers() {
                 }
             }
         }
+    });
+
+    // PlayerMove (4001)
+    router_->registerHandler(4001, [this](ConnectionId conn_id, const Frame& frame) {
+        auto* s = sessions_->getByConn(conn_id);
+        if (!s || s->state != SessionState::IN_BATTLE) return;
+
+        miniarena::PlayerMoveRequest req;
+        if (!req.ParseFromString(frame.payload)) return;
+
+        Command cmd;
+        cmd.type = CommandType::MOVE;
+        cmd.player_id = s->player_id;
+        cmd.sequence = frame.sequence;
+        cmd.move_dir_x = req.direction_x();
+        cmd.move_dir_y = req.direction_y();
+        battle_mgr_->dispatchCommand(s->current_room, cmd);
+    });
+
+    // PlayerAttack (4002)
+    router_->registerHandler(4002, [this](ConnectionId conn_id, const Frame& frame) {
+        auto* s = sessions_->getByConn(conn_id);
+        if (!s || s->state != SessionState::IN_BATTLE) return;
+
+        miniarena::PlayerAttackRequest req;
+        if (!req.ParseFromString(frame.payload)) return;
+
+        Command cmd;
+        cmd.type = CommandType::ATTACK;
+        cmd.player_id = s->player_id;
+        cmd.sequence = frame.sequence;
+        cmd.target_id = req.target_id();
+        battle_mgr_->dispatchCommand(s->current_room, cmd);
+    });
+
+    // PlayerSkill (4003)
+    router_->registerHandler(4003, [this](ConnectionId conn_id, const Frame& frame) {
+        auto* s = sessions_->getByConn(conn_id);
+        if (!s || s->state != SessionState::IN_BATTLE) return;
+
+        miniarena::PlayerSkillRequest req;
+        if (!req.ParseFromString(frame.payload)) return;
+
+        Command cmd;
+        cmd.type = CommandType::SKILL;
+        cmd.player_id = s->player_id;
+        cmd.sequence = frame.sequence;
+        cmd.skill_id = req.skill_id();
+        cmd.target_id = req.target_id();
+        cmd.skill_target_x = req.target_x();
+        cmd.skill_target_y = req.target_y();
+        battle_mgr_->dispatchCommand(s->current_room, cmd);
     });
 }
 

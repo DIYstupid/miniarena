@@ -15,6 +15,7 @@ class RedisClient;
 class SessionManager;
 class RoomManager;
 class MatchManager;
+class BattleManager;
 class MessageRouter;
 class EventLoop;
 class Acceptor;
@@ -67,6 +68,7 @@ private:
     std::unique_ptr<SessionManager> sessions_;
     std::unique_ptr<RoomManager> rooms_;
     std::unique_ptr<MatchManager> matcher_;
+    std::unique_ptr<BattleManager> battle_mgr_;
     std::unique_ptr<MessageRouter> router_;
 
     // Network

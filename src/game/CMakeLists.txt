@@ -6,6 +6,12 @@ add_library(miniarena_game STATIC
     match_manager.cpp
     message_router.cpp
     game_server.cpp
+    command.cpp
+    tick_engine.cpp
+    aoi_grid.cpp
+    broadcaster.cpp
+    logic_worker.cpp
+    battle_manager.cpp
 )
 
 target_include_directories(miniarena_game PUBLIC
