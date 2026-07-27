@@ -43,9 +43,9 @@ void SessionManager::kickDuplicate(PlayerId player_id) {
 LoginResult SessionManager::login(ConnectionId conn_id,
                                    const std::string& username,
                                    const std::string& password) {
+    spdlog::info("SessionManager::login: conn={} user={}", conn_id, username);
     LoginResult result;
 
-    // 1. Look up or create player
     auto player = mysql_->getPlayer(username);
     if (!player) {
         // Auto-register (simplified; real impl would hash password)

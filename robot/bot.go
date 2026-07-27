@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Bot represents a single simulated player.
 type Bot struct {
 	id        int
 	username  string
@@ -22,6 +21,8 @@ type Bot struct {
 	seq       uint64
 	stopCh    chan struct{}
 	stats     *BotStats
+	latency   *LatencyStats
+	cmdRate   int // commands per second
 }
 
 type BotStats struct {
@@ -38,130 +39,122 @@ type BotStats struct {
 	EndReceived   atomic.Int64
 }
 
-func NewBot(id int, stats *BotStats) *Bot {
+func NewBot(id int, stats *BotStats, latency *LatencyStats) *Bot {
 	return &Bot{
 		id:       id,
 		username: fmt.Sprintf("bot_%d", id),
 		stopCh:   make(chan struct{}),
 		stats:    stats,
+		latency:  latency,
+		cmdRate:  5, // default
 	}
 }
 
-// Run executes the full bot lifecycle: connect → login → match → battle → loop → end.
 func (b *Bot) Run(serverAddr string) error {
-	// 1. Connect
+	start := time.Now()
 	conn, err := net.DialTimeout("tcp", serverAddr, 5*time.Second)
 	if err != nil {
-		return fmt.Errorf("bot %d: connect: %w", b.id, err)
+		return fmt.Errorf("connect: %w", err)
 	}
 	b.conn = conn
 	defer conn.Close()
 
-	// 2. Login
+	b.recordLatency(start, "connect")
+
 	if err := b.doLogin(); err != nil {
-		return fmt.Errorf("bot %d: login: %w", b.id, err)
+		return fmt.Errorf("login: %w", err)
 	}
 
-	// 3. Match
+	// Login-only mode: stop here
+	if b.cmdRate <= 0 {
+		return nil
+	}
+
 	if err := b.doMatch(); err != nil {
-		return fmt.Errorf("bot %d: match: %w", b.id, err)
+		return fmt.Errorf("match: %w", err)
 	}
-
-	// 4. Enter room
 	if err := b.doEnterRoom(); err != nil {
-		return fmt.Errorf("bot %d: enter room: %w", b.id, err)
+		return fmt.Errorf("room: %w", err)
 	}
-
-	// 5. Ready
 	if err := b.doReady(); err != nil {
-		return fmt.Errorf("bot %d: ready: %w", b.id, err)
+		return fmt.Errorf("ready: %w", err)
 	}
-
-	// 6. Wait for battle start
 	if err := b.waitBattleStart(); err != nil {
-		return fmt.Errorf("bot %d: wait battle: %w", b.id, err)
+		return fmt.Errorf("battle: %w", err)
 	}
 
-	// 7. Battle loop
 	b.battleLoop()
-
 	return nil
 }
 
+func (b *Bot) recordLatency(start time.Time, phase string) {
+	if b.latency != nil {
+		b.latency.Record(time.Since(start))
+	}
+}
+
 func (b *Bot) doLogin() error {
-	// LoginRequest: username (field 1) + password (field 2)
-	payload := encodeLoginRequest(b.username, b.username) // password = username
+	start := time.Now()
+	payload := encodeLoginRequest(b.username, b.username)
 	if err := SendFrame(b.conn, MsgLoginRequest, 0, b.nextSeq(), payload); err != nil {
 		return err
 	}
-
 	f, err := DiscardUntil(&b.reader, b.conn, MsgLoginResponse)
 	if err != nil {
 		return err
 	}
 	if code := GetErrorCode(f.Payload); code != 0 {
 		b.stats.LoginFail.Add(1)
-		return fmt.Errorf("login failed: error_code=%d", code)
+		return fmt.Errorf("login error=%d", code)
 	}
 	b.sessionID = GetSessionID(f.Payload)
 	b.playerID = GetPlayerID(f.Payload)
 	b.stats.LoginOK.Add(1)
+	b.recordLatency(start, "login")
 	return nil
 }
 
 func (b *Bot) doMatch() error {
-	// MatchStartRequest: mode (field 1) = 0
-	payload := []byte{0x08, 0x00} // mode=0
+	payload := []byte{0x08, 0x00}
 	if err := SendFrame(b.conn, MsgMatchStartRequest, 0, b.nextSeq(), payload); err != nil {
 		return err
 	}
-
-	// Wait for MatchStartResponse
 	f, err := DiscardUntil(&b.reader, b.conn, MsgMatchStartResponse)
 	if err != nil {
 		return err
 	}
 	if code := GetErrorCode(f.Payload); code != 0 {
 		b.stats.MatchFail.Add(1)
-		return fmt.Errorf("match start failed: error_code=%d", code)
+		return fmt.Errorf("match error=%d", code)
 	}
 	b.stats.MatchOK.Add(1)
 
-	// Wait for MatchSuccessNotify (2004)
 	f2, err := DiscardUntil(&b.reader, b.conn, MsgMatchSuccessNotify)
 	if err != nil {
 		return err
 	}
 	b.roomID = GetRoomID(f2.Payload)
-	if b.roomID == 0 {
-		return fmt.Errorf("match success: room_id=0")
-	}
 	return nil
 }
 
 func (b *Bot) doEnterRoom() error {
-	// EnterRoomRequest: room_id (field 1) + session_id (field 2)
 	payload := encodeEnterRoomRequest(b.roomID, b.sessionID)
 	if err := SendFrame(b.conn, MsgEnterRoomRequest, 0, b.nextSeq(), payload); err != nil {
 		return err
 	}
-
 	f, err := DiscardUntil(&b.reader, b.conn, MsgEnterRoomResponse)
 	if err != nil {
 		return err
 	}
 	if code := GetErrorCode(f.Payload); code != 0 {
-		return fmt.Errorf("enter room failed: error_code=%d", code)
+		return fmt.Errorf("enter room error=%d", code)
 	}
 	b.stats.RoomOK.Add(1)
 	return nil
 }
 
 func (b *Bot) doReady() error {
-	if err := SendFrame(b.conn, MsgPlayerReadyRequest, 0, b.nextSeq(), nil); err != nil {
-		return err
-	}
-	return nil
+	return SendFrame(b.conn, MsgPlayerReadyRequest, 0, b.nextSeq(), nil)
 }
 
 func (b *Bot) waitBattleStart() error {
@@ -174,17 +167,25 @@ func (b *Bot) waitBattleStart() error {
 }
 
 func (b *Bot) battleLoop() {
-	ticker := time.NewTicker(200 * time.Millisecond) // 5 ops/sec
+	if b.cmdRate <= 0 {
+		// Login-only mode: just wait for end or disconnect
+		for {
+			_, err := b.reader.ReadFrame(b.conn)
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	interval := time.Second / time.Duration(b.cmdRate)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			b.sendRandomCommand()
-		case <-b.stopCh:
-			return
 		default:
-			// Also check for battle-end messages (non-blocking)
 			f, err := b.reader.ReadFrame(b.conn)
 			if err != nil {
 				return
@@ -206,19 +207,16 @@ func (b *Bot) sendRandomCommand() {
 	r := rand.Intn(100)
 	switch {
 	case r < 80:
-		// Move
 		dx := rand.Float32()*2 - 1
 		dy := rand.Float32()*2 - 1
 		payload := encodeMoveRequest(dx, dy)
 		SendFrame(b.conn, MsgPlayerMoveRequest, 0, b.nextSeq(), payload)
 		b.stats.MovesSent.Add(1)
 	case r < 90:
-		// Attack (target = random)
-		payload := encodeAttackRequest(2) // simplified: target player 2
+		payload := encodeAttackRequest(2)
 		SendFrame(b.conn, MsgPlayerAttackRequest, 0, b.nextSeq(), payload)
 		b.stats.AttacksSent.Add(1)
 	default:
-		// Skill
 		skillID := int32(rand.Intn(3) + 1)
 		payload := encodeSkillRequest(skillID, 2)
 		SendFrame(b.conn, MsgPlayerSkillRequest, 0, b.nextSeq(), payload)
@@ -231,15 +229,7 @@ func (b *Bot) nextSeq() uint64 {
 	return b.seq
 }
 
-func (b *Bot) Stop() {
-	close(b.stopCh)
-}
-
-// --- Minimal protobuf payload constructors for request messages ---
-
 func encodeLoginRequest(username, password string) []byte {
-	// field 1: string username, field 2: string password
-	// Tag 1 = 0x0a (string), Tag 2 = 0x12 (string)
 	buf := make([]byte, 0, 128)
 	buf = append(buf, 0x0a, byte(len(username)))
 	buf = append(buf, []byte(username)...)
@@ -250,19 +240,16 @@ func encodeLoginRequest(username, password string) []byte {
 
 func encodeEnterRoomRequest(roomID, sessionID uint64) []byte {
 	buf := make([]byte, 0, 32)
-	// field 1: uint64 room_id
 	buf = append(buf, 0x08, byte(roomID))
-	// field 2: uint64 session_id
 	buf = append(buf, 0x10, byte(sessionID))
 	return buf
 }
 
 func encodeMoveRequest(dirX, dirY float32) []byte {
-	// field 1: float direction_x, field 2: float direction_y
 	buf := make([]byte, 10)
-	buf[0] = 0x0d // tag 1, fixed32
+	buf[0] = 0x0d
 	binary.LittleEndian.PutUint32(buf[1:5], math.Float32bits(dirX))
-	buf[5] = 0x15 // tag 2, fixed32
+	buf[5] = 0x15
 	binary.LittleEndian.PutUint32(buf[6:10], math.Float32bits(dirY))
 	return buf
 }

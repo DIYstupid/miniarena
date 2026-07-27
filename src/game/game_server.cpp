@@ -104,18 +104,19 @@ void GameServer::initNetwork() {
     for (auto& loop : io_loops_) {
         auto* loop_ptr = loop.get();
         loop->setFrameCallback([this, loop_ptr](ConnectionId conn_id, std::vector<Frame> frames) {
-            // Track conn → loop mapping for sendResponse
+            spdlog::info("frame_cb: conn={} frames={}", conn_id, frames.size());
             {
-                std::lock_guard lock(conn_mutex_);
+                std::lock_guard<std::mutex> lock(conn_mutex_);
                 conn_to_loop_[conn_id] = loop_ptr;
-            }
             for (auto& f : frames) {
+                spdlog::info("dispatching msg_id={} payload_size={}", f.message_id, f.payload.size());
                 router_->dispatch(conn_id, f);
+            }
             }
         });
         loop->setDisconnectCallback([this](ConnectionId conn_id) {
             {
-                std::lock_guard lock(conn_mutex_);
+                std::lock_guard<std::mutex> lock(conn_mutex_);
                 conn_to_loop_.erase(conn_id);
             }
             auto* s = sessions_->getByConn(conn_id);
@@ -138,15 +139,17 @@ void GameServer::initNetwork() {
 void GameServer::registerHandlers() {
     // Login (1001)
     router_->registerHandler(1001, [this](ConnectionId conn_id, const Frame& frame) {
+        spdlog::info("login_handler: conn={} payload_size={}", conn_id, frame.payload.size());
         miniarena::LoginRequest req;
-        if (!req.ParseFromString(frame.payload)) return;
+        bool ok = req.ParseFromString(frame.payload);
+        spdlog::info("login_handler: parse_ok={}", ok);
+        if (!ok) return;
 
         auto result = sessions_->login(conn_id, req.username(), req.password());
 
         miniarena::LoginResponse resp;
         resp.set_error_code(result.error_code);
         resp.set_session_id(result.session_id);
-        resp.set_player_id(result.player_id);
         resp.set_error_msg(result.error_msg);
 
         std::string data;
@@ -359,17 +362,28 @@ void GameServer::timerLoop() {
 
 void GameServer::sendResponse(ConnectionId conn_id, uint32_t msg_id,
                                const std::string& payload) {
-    auto data = FrameCodec::encode(msg_id, 0, 0, payload);
+    spdlog::info("sendResponse: conn={} msg={}", conn_id, msg_id);
+    std::string data;
+    try {
+        data = FrameCodec::encode(msg_id, 0, 0, payload);
+    } catch (const std::exception& e) {
+        spdlog::error("sendResponse encode failed: {}", e.what());
+        return;
+    }
+    std::cerr << "sendResponse: encoded " << data.size() << " bytes" << std::endl;
 
-    std::lock_guard lock(conn_mutex_);
     auto it = conn_to_loop_.find(conn_id);
     if (it != conn_to_loop_.end()) {
+        std::cerr << "sendResponse: found loop, sending" << std::endl;
         it->second->sendToConnection(conn_id, data);
+        std::cerr << "sendResponse: sent" << std::endl;
+    } else {
+        std::cerr << "sendResponse: NOT FOUND conn=" << conn_id << std::endl;
     }
 }
 
 void GameServer::onConnectionAccepted(ConnectionId conn_id, EventLoop* loop) {
-    std::lock_guard lock(conn_mutex_);
+    std::lock_guard<std::mutex> lock(conn_mutex_);
     conn_to_loop_[conn_id] = loop;
 }
 

@@ -4,8 +4,7 @@
 #include <optional>
 #include <string>
 #include <cstdint>
-#include <memory>
-
+#include <mutex>
 
 #include "game/player.h"
 
@@ -53,6 +52,7 @@ public:
 
 private:
     MYSQL* conn_ = nullptr;
+    mutable std::recursive_mutex mtx_;
 };
 
 }  // namespace miniarena
