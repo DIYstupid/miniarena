@@ -137,6 +137,26 @@ void BattleManager::dispatchCommand(RoomId room_id, Command cmd) {
     it->second->pushCommand(std::move(cmd));
 }
 
+void BattleManager::onPlayerDisconnect(PlayerId player_id, RoomId room_id) {
+    auto it = room_to_worker_.find(room_id);
+    if (it == room_to_worker_.end()) return;
+    it->second->markDisconnected(player_id, room_id);
+    spdlog::info("Battle: player {} disconnected from room {}", player_id, room_id);
+}
+
+void BattleManager::sendSnapshot(PlayerId player_id, RoomId room_id) {
+    auto it = room_to_worker_.find(room_id);
+    if (it == room_to_worker_.end()) return;
+
+    std::string snapshot = it->second->getSnapshot(room_id);
+    if (snapshot.empty()) return;
+
+    if (send_cb_) {
+        send_cb_(player_id, 5003, snapshot);
+    }
+    spdlog::info("Battle: sent snapshot to player {} for room {}", player_id, room_id);
+}
+
 std::vector<SettlementEntry> BattleManager::computeSettlement(
     const std::unordered_map<PlayerId, BattlePlayer>& players) {
     std::vector<SettlementEntry> entries;

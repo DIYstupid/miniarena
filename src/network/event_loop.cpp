@@ -209,7 +209,9 @@ void EventLoop::cleanupClosed() {
         auto& conn = it->second;
         if (conn->shouldCleanup()) {
             int fd = conn->fd();
-            spdlog::debug("conn {}: cleanup", conn->id());
+            ConnectionId cid = conn->id();
+            spdlog::debug("conn {}: cleanup", cid);
+            if (disconnect_cb_) disconnect_cb_(cid);
             epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
             fd_to_id_.erase(fd);
             it = conns_.erase(it);

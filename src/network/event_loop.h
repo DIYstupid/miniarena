@@ -14,9 +14,10 @@
 namespace miniarena {
 
 // Callback invoked when a connection receives decoded frames.
-// Called from the EventLoop's thread.
 using FrameCallback = std::function<void(ConnectionId conn_id, std::vector<Frame> frames)>;
 
+// Callback invoked when a connection is removed (disconnect/timeout/error).
+using DisconnectCallback = std::function<void(ConnectionId conn_id)>;
 // Single-threaded epoll event loop.
 // Each instance runs on its own IO thread.
 class EventLoop {
@@ -41,7 +42,7 @@ public:
 
     // --- Frame callback ---
     void setFrameCallback(FrameCallback cb) { frame_cb_ = std::move(cb); }
-
+    void setDisconnectCallback(DisconnectCallback cb) { disconnect_cb_ = std::move(cb); }
     // --- Main loop ---
     void run();
     void stop();
@@ -70,7 +71,7 @@ private:
     std::unordered_map<int, ConnectionId> fd_to_id_;
     TimerWheel timer_wheel_;
     FrameCallback frame_cb_;
-
+    DisconnectCallback disconnect_cb_;
     uint64_t heartbeat_ms_ = net::kHeartbeatIntervalMs;
     uint64_t timeout_ms_   = net::kConnectionTimeoutMs;
 

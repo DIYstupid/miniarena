@@ -36,10 +36,13 @@ public:
     // IO thread pushes commands here
     void pushCommand(Command cmd);
 
+    // P5: Reconnect support
+    std::string getSnapshot(RoomId room_id) const;
+    void markDisconnected(PlayerId player_id, RoomId room_id);
+
     // Send callback for broadcasting to connections
     using SendCallback = std::function<void(PlayerId, uint32_t, const std::string&)>;
     void setSendCallback(SendCallback cb);
-
     [[nodiscard]] int id() const noexcept { return id_; }
     [[nodiscard]] size_t roomCount() const noexcept { return rooms_.size(); }
 
@@ -54,10 +57,11 @@ private:
     TickEngine tick_engine_;
     AoiGrid aoi_;
     Broadcaster bc_;
-
     struct RoomState {
         Room* room = nullptr;
         std::unordered_map<PlayerId, BattlePlayer> players;
+        // P5: player_id → disconnect time
+        std::unordered_map<PlayerId, std::chrono::steady_clock::time_point> disconnected;
     };
     std::unordered_map<RoomId, RoomState> rooms_;
 };

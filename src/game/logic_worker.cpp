@@ -39,7 +39,10 @@ void LogicWorker::stop() {
 
 void LogicWorker::addRoom(Room* room,
                            std::unordered_map<PlayerId, BattlePlayer> init_players) {
-    rooms_[room->id()] = {room, std::move(init_players)};
+    RoomState rs;
+    rs.room = room;
+    rs.players = std::move(init_players);
+    rooms_[room->id()] = std::move(rs);
     spdlog::info("LogicWorker {}: room {} added ({} players)",
                  id_, room->id(), rooms_[room->id()].players.size());
 }
@@ -89,8 +92,62 @@ void LogicWorker::tick() {
         }
     }
 
-    // Flush any override messages from this tick
+    // Flush override messages
     bc_.flushOverrides();
+
+    // P5: Check disconnected players timeout (30s)
+    auto now = std::chrono::steady_clock::now();
+    for (auto& [room_id, rs] : rooms_) {
+        for (auto it = rs.disconnected.begin(); it != rs.disconnected.end(); ) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                now - it->second).count();
+            if (elapsed >= 30) {
+                // Timeout: remove player from battle
+                PlayerId pid = it->first;
+                rs.players.erase(pid);
+                aoi_.remove(pid);
+                spdlog::info("LogicWorker {}: player {} disconnected timeout, removed from room {}",
+                             id_, pid, room_id);
+                it = rs.disconnected.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+}
+
+std::string LogicWorker::getSnapshot(RoomId room_id) const {
+    auto it = rooms_.find(room_id);
+    if (it == rooms_.end()) return "";
+
+    miniarena::BattleSnapshotNotify snapshot;
+    snapshot.set_room_id(room_id);
+    snapshot.set_current_tick(0);
+
+    for (auto& [pid, bp] : it->second.players) {
+        auto* ps = snapshot.add_players();
+        ps->set_player_id(bp.id);
+        ps->set_position_x(bp.pos_x);
+        ps->set_position_y(bp.pos_y);
+        ps->set_direction_x(bp.dir_x);
+        ps->set_direction_y(bp.dir_y);
+        ps->set_hp(bp.hp);
+        ps->set_max_hp(bp.max_hp);
+        ps->set_alive(bp.alive);
+    }
+
+    std::string data;
+    snapshot.SerializeToString(&data);
+    return data;
+}
+
+void LogicWorker::markDisconnected(PlayerId player_id, RoomId room_id) {
+    auto it = rooms_.find(room_id);
+    if (it == rooms_.end()) return;
+
+    it->second.disconnected[player_id] = std::chrono::steady_clock::now();
+    spdlog::info("LogicWorker {}: player {} marked disconnected in room {}",
+                 id_, player_id, room_id);
 }
 
 }  // namespace miniarena

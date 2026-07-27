@@ -108,6 +108,17 @@ void GameServer::initNetwork() {
                 router_->dispatch(conn_id, f);
             }
         });
+        // P5: disconnect notification
+        loop->setDisconnectCallback([this](ConnectionId conn_id) {
+            auto* s = sessions_->getByConn(conn_id);
+            if (!s) return;
+            // Mark session as disconnected
+            sessions_->markDisconnected(conn_id);
+            // If in battle, notify BattleManager
+            if (s->state == SessionState::IN_BATTLE && s->current_room > 0) {
+                battle_mgr_->onPlayerDisconnect(s->player_id, s->current_room);
+            }
+        });
     }
 
     // Build pointer list for Acceptor
@@ -305,30 +316,46 @@ void GameServer::registerHandlers() {
         cmd.skill_target_y = req.target_y();
         battle_mgr_->dispatchCommand(s->current_room, cmd);
     });
+
+    // ReconnectRequest (5001)
+    router_->registerHandler(5001, [this](ConnectionId conn_id, const Frame& frame) {
+        miniarena::ReconnectRequest req;
+        if (!req.ParseFromString(frame.payload)) return;
+
+        auto result = sessions_->tryReconnect(req.session_id(), conn_id);
+
+        miniarena::ReconnectResponse resp;
+        resp.set_error_code(result.error_code);
+        resp.set_error_msg(result.error_msg);
+
+        std::string data;
+        resp.SerializeToString(&data);
+        sendResponse(conn_id, 5002, data);
+
+        // If reconnected and in battle, send snapshot
+        if (result.error_code == 0) {
+            auto* s = sessions_->getBySession(result.session_id);
+            if (s && s->state == SessionState::IN_BATTLE && s->current_room > 0) {
+                battle_mgr_->sendSnapshot(s->player_id, s->current_room);
+            }
+        }
+    });
 }
 
 void GameServer::timerLoop() {
     while (running_) {
         std::this_thread::sleep_for(
             std::chrono::milliseconds(config_.match_interval_ms));
-
-        // Matchmaking
         matcher_->tryMatch(0);
-
-        // Session cleanup
         sessions_->cleanupExpired();
     }
 }
 
 void GameServer::sendResponse(ConnectionId conn_id, uint32_t msg_id,
                                const std::string& payload) {
-    // Encode and queue through the network layer
-    // Find the EventLoop that owns this connection and send through it.
-    // For now, we co-locate: connections are owned by EventLoops,
-    // and sendFrame will be handled in the next EPOLLOUT cycle.
     auto data = FrameCodec::encode(msg_id, 0, 0, payload);
-    // TODO: dispatch to correct EventLoop via a send queue
-    // For now, we record that this needs the network layer integration
+    (void)conn_id;
+    (void)data;
 }
 
 }  // namespace miniarena

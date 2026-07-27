@@ -39,10 +39,13 @@ public:
     // IO → Logic: dispatch a command to the room's owning LogicWorker.
     void dispatchCommand(RoomId room_id, Command cmd);
 
+    // P5: Player disconnect from battle
+    void onPlayerDisconnect(PlayerId player_id, RoomId room_id);
+    void sendSnapshot(PlayerId player_id, RoomId room_id);
+
     // Send callback wiring
     using SendCallback = std::function<void(PlayerId, uint32_t, const std::string&)>;
     void setSendCallback(SendCallback cb);
-
     [[nodiscard]] size_t activeBattles() const noexcept { return room_to_worker_.size(); }
 
 private:
