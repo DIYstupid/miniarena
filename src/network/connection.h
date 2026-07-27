@@ -38,6 +38,8 @@ public:
     // --- Send ---
     void sendFrame(uint32_t msg_id, uint16_t flags,
                    uint64_t seq, std::string_view payload);
+    // Send pre-encoded frame data directly (no re-encoding).
+    void sendRaw(std::string_view data);
     [[nodiscard]] bool sendQueueFull() const noexcept;
     [[nodiscard]] bool hasPendingWrites() const noexcept;
 

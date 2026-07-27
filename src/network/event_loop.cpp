@@ -75,6 +75,12 @@ void EventLoop::closeConnection(ConnectionId id) {
     timer_wheel_.remove(id);
 }
 
+void EventLoop::sendToConnection(ConnectionId id, const std::string& data) {
+    auto it = conns_.find(id);
+    if (it == conns_.end()) return;
+    it->second->sendRaw(data);
+    enableWrite(id);
+}
 void EventLoop::enableRead(ConnectionId id) {
     auto it = conns_.find(id);
     if (it == conns_.end()) return;

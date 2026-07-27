@@ -35,12 +35,13 @@ public:
     // Mark a connection for closing.
     void closeConnection(ConnectionId conn_id);
 
+    // Queue data for sending and enable EPOLLOUT (thread-safe).
+    void sendToConnection(ConnectionId conn_id, const std::string& data);
+
     // --- Event registration ---
     void enableRead(ConnectionId conn_id);
     void enableWrite(ConnectionId conn_id);
     void disableWrite(ConnectionId conn_id);
-
-    // --- Frame callback ---
     void setFrameCallback(FrameCallback cb) { frame_cb_ = std::move(cb); }
     void setDisconnectCallback(DisconnectCallback cb) { disconnect_cb_ = std::move(cb); }
     // --- Main loop ---

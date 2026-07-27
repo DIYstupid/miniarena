@@ -84,6 +84,18 @@ void Connection::sendFrame(uint32_t msg_id, uint16_t flags,
     }
 }
 
+void Connection::sendRaw(std::string_view data) {
+    if (state_ != ConnectionState::CONNECTED &&
+        state_ != ConnectionState::ACTIVE) {
+        return;
+    }
+    if (send_buf_.readable() + data.size() > kSendQueueMax) {
+        spdlog::warn("conn {}: send queue full, closing", id_);
+        close();
+        return;
+    }
+    send_buf_.write(data.data(), data.size());
+}
 bool Connection::sendQueueFull() const noexcept {
     return send_buf_.readable() >= kSendQueueMax;
 }

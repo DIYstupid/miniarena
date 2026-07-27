@@ -101,20 +101,26 @@ void GameServer::initNetwork() {
         io_loops_.push_back(std::make_unique<EventLoop>());
     }
 
-    // Wire frame callback: network → message router
     for (auto& loop : io_loops_) {
-        loop->setFrameCallback([this](ConnectionId conn_id, std::vector<Frame> frames) {
+        auto* loop_ptr = loop.get();
+        loop->setFrameCallback([this, loop_ptr](ConnectionId conn_id, std::vector<Frame> frames) {
+            // Track conn → loop mapping for sendResponse
+            {
+                std::lock_guard lock(conn_mutex_);
+                conn_to_loop_[conn_id] = loop_ptr;
+            }
             for (auto& f : frames) {
                 router_->dispatch(conn_id, f);
             }
         });
-        // P5: disconnect notification
         loop->setDisconnectCallback([this](ConnectionId conn_id) {
+            {
+                std::lock_guard lock(conn_mutex_);
+                conn_to_loop_.erase(conn_id);
+            }
             auto* s = sessions_->getByConn(conn_id);
             if (!s) return;
-            // Mark session as disconnected
             sessions_->markDisconnected(conn_id);
-            // If in battle, notify BattleManager
             if (s->state == SessionState::IN_BATTLE && s->current_room > 0) {
                 battle_mgr_->onPlayerDisconnect(s->player_id, s->current_room);
             }
@@ -354,8 +360,17 @@ void GameServer::timerLoop() {
 void GameServer::sendResponse(ConnectionId conn_id, uint32_t msg_id,
                                const std::string& payload) {
     auto data = FrameCodec::encode(msg_id, 0, 0, payload);
-    (void)conn_id;
-    (void)data;
+
+    std::lock_guard lock(conn_mutex_);
+    auto it = conn_to_loop_.find(conn_id);
+    if (it != conn_to_loop_.end()) {
+        it->second->sendToConnection(conn_id, data);
+    }
+}
+
+void GameServer::onConnectionAccepted(ConnectionId conn_id, EventLoop* loop) {
+    std::lock_guard lock(conn_mutex_);
+    conn_to_loop_[conn_id] = loop;
 }
 
 }  // namespace miniarena

@@ -4,21 +4,14 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <unordered_map>
+#include <mutex>
 #include "player.h"
 #include "session.h"
 #include "room.h"
+#include "network/network_types.h"
 
 namespace miniarena {
-
-class MysqlClient;
-class RedisClient;
-class SessionManager;
-class RoomManager;
-class MatchManager;
-class BattleManager;
-class MessageRouter;
-class EventLoop;
-class Acceptor;
 
 struct GameConfig {
     uint16_t listen_port    = 9000;
@@ -36,8 +29,16 @@ struct GameConfig {
     int         redis_port = 6379;
 };
 
-// Top-level assembler: wires together storage, session, room,
-// match, network layers and drives the main loop.
+class MysqlClient;
+class RedisClient;
+class SessionManager;
+class RoomManager;
+class MatchManager;
+class BattleManager;
+class MessageRouter;
+class EventLoop;
+class Acceptor;
+
 class GameServer {
 public:
     explicit GameServer(const GameConfig& config);
@@ -57,6 +58,7 @@ private:
     void timerLoop();
     void sendResponse(ConnectionId conn_id, uint32_t msg_id,
                       const std::string& payload);
+    void onConnectionAccepted(ConnectionId conn_id, EventLoop* loop);
 
     GameConfig config_;
 
@@ -74,6 +76,10 @@ private:
     // Network
     std::vector<std::unique_ptr<EventLoop>> io_loops_;
     std::unique_ptr<Acceptor> acceptor_;
+
+    // Connection → EventLoop mapping for sendResponse
+    std::mutex conn_mutex_;
+    std::unordered_map<ConnectionId, EventLoop*> conn_to_loop_;
 
     // Timer
     std::thread timer_thread_;

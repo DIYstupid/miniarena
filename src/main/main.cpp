@@ -21,7 +21,7 @@ int main() {
         miniarena::GameConfig config;
         config.listen_port = 9000;
         config.io_threads = 4;
-
+        config.match_room_size = 2;
         miniarena::GameServer server(config);
         server.start();
 
