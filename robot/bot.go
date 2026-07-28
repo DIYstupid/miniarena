@@ -187,20 +187,6 @@ func (b *Bot) battleLoop() {
 		select {
 		case <-ticker.C:
 			b.sendRandomCommand()
-		default:
-			f, err := b.reader.ReadFrame(b.conn)
-			if err != nil {
-				return
-			}
-			if f != nil {
-				switch f.MsgID {
-				case MsgBattleEndNotify:
-					b.stats.EndReceived.Add(1)
-					return
-				case MsgPlayerDeathNotify:
-					b.stats.DeathReceived.Add(1)
-				}
-			}
 		}
 	}
 }

@@ -1,8 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <shared_mutex>
 #include <unordered_map>
-#include <thread>
+#include <variant>
+
 #include "player.h"
 #include "room.h"
 #include "battle_player.h"
@@ -15,12 +21,25 @@ namespace miniarena {
 
 class Room;
 
+// Operation types for thread-safe async dispatch to LogicWorker.
+enum class RoomOp : uint8_t { AddRoom, RemoveRoom, MarkDisconnected };
+
+struct PendingOp {
+    RoomOp type;
+    RoomId room_id = 0;
+    PlayerId player_id = 0;
+    // Owned pointer for addRoom data (to avoid copying std::unordered_map in variant)
+    std::shared_ptr<void> data;  // actually std::unordered_map<PlayerId, BattlePlayer>
+    Room* room_ptr = nullptr;
+};
+
 // A single logic thread that owns a set of rooms.
 // Each room is bound to exactly one LogicWorker for its lifetime.
 // Runs a 20 Hz tick loop.
 class LogicWorker {
 public:
     explicit LogicWorker(int id);
+    ~LogicWorker();
 
     LogicWorker(const LogicWorker&) = delete;
     LogicWorker& operator=(const LogicWorker&) = delete;
@@ -28,17 +47,17 @@ public:
     void run();
     void stop();
 
-    // Room management
+    // Room management (thread-safe: enqueues operation)
     void addRoom(Room* room,
                  std::unordered_map<PlayerId, BattlePlayer> init_players);
     void removeRoom(RoomId room_id);
 
-    // IO thread pushes commands here
+    // IO thread pushes commands here (already thread-safe via CommandQueue)
     void pushCommand(Command cmd);
 
-    // P5: Reconnect support
-    std::string getSnapshot(RoomId room_id) const;
+    // P5: Reconnect support (thread-safe: enqueues operation)
     void markDisconnected(PlayerId player_id, RoomId room_id);
+    std::string getSnapshot(RoomId room_id) const;
 
     // Send callback for broadcasting to connections
     using SendCallback = std::function<void(PlayerId, uint32_t, const std::string&)>;
@@ -48,10 +67,17 @@ public:
 
 private:
     void tick();
+    void drainPendingOps();
 
     int id_;
     std::atomic<bool> running_{false};
     std::thread thread_;
+
+    // Thread-safe pending ops (filled by external threads, drained by LogicWorker)
+    std::queue<PendingOp> pending_ops_;
+    mutable std::mutex pending_mtx_;
+    std::condition_variable pending_cv_;
+    mutable std::shared_mutex rooms_mtx_;
 
     CommandQueue cmd_queue_;
     TickEngine tick_engine_;
@@ -60,7 +86,6 @@ private:
     struct RoomState {
         Room* room = nullptr;
         std::unordered_map<PlayerId, BattlePlayer> players;
-        // P5: player_id → disconnect time
         std::unordered_map<PlayerId, std::chrono::steady_clock::time_point> disconnected;
     };
     std::unordered_map<RoomId, RoomState> rooms_;
