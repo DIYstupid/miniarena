@@ -19,7 +19,7 @@ using FrameCallback = std::function<void(ConnectionId conn_id, std::vector<Frame
 
 // Callback invoked when a connection is removed (disconnect/timeout/error).
 using DisconnectCallback = std::function<void(ConnectionId conn_id)>;
-// Single-threaded epoll event loop.
+using PendingWrite = std::pair<ConnectionId, std::string>;
 // Each instance runs on its own IO thread.
 class EventLoop {
 public:
@@ -63,6 +63,7 @@ public:
 
     void addConnectionImpl(std::unique_ptr<Connection> conn);
     void drainPending();
+    void drainPendingWrites();
     void handleEvents(const epoll_event* events, int n);
     void checkTimeouts(uint64_t now_ms);
     void cleanupClosed();
@@ -73,6 +74,9 @@ public:
     std::queue<std::unique_ptr<Connection>> pending_conns_;
     mutable std::mutex pending_mtx_;
 
+    // Thread-safe pending write queue (filled by any thread via sendToConnection)
+    std::queue<PendingWrite> pending_writes_;
+    mutable std::mutex pending_writes_mtx_;
     std::unordered_map<ConnectionId, std::unique_ptr<Connection>> conns_;
     std::unordered_map<int, ConnectionId> fd_to_id_;
     TimerWheel timer_wheel_;

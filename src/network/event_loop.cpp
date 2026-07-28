@@ -82,6 +82,21 @@ void EventLoop::drainPending() {
         lock.lock();
     }
 }
+
+void EventLoop::drainPendingWrites() {
+    std::unique_lock<std::mutex> lock(pending_writes_mtx_);
+    while (!pending_writes_.empty()) {
+        auto [id, data] = std::move(pending_writes_.front());
+        pending_writes_.pop();
+        lock.unlock();
+        auto it = conns_.find(id);
+        if (it != conns_.end()) {
+            it->second->sendRaw(data);
+            enableWrite(id);
+        }
+        lock.lock();
+    }
+}
 void EventLoop::closeConnection(ConnectionId id) {
     auto it = conns_.find(id);
     if (it == conns_.end()) return;
@@ -91,10 +106,11 @@ void EventLoop::closeConnection(ConnectionId id) {
 }
 
 void EventLoop::sendToConnection(ConnectionId id, const std::string& data) {
-    auto it = conns_.find(id);
-    if (it == conns_.end()) return;
-    it->second->sendRaw(data);
-    enableWrite(id);
+    {
+        std::lock_guard<std::mutex> lock(pending_writes_mtx_);
+        pending_writes_.emplace(id, data);
+    }
+    wake();
 }
 void EventLoop::enableRead(ConnectionId id) {
     auto it = conns_.find(id);
@@ -144,6 +160,7 @@ void EventLoop::run() {
             break;
         }
 
+        drainPendingWrites();
         drainPending();
         handleEvents(events, n);
 
