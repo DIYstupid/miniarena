@@ -10,69 +10,103 @@ RedisClient::~RedisClient() {
     close();
 }
 
-bool RedisClient::connect(const std::string& host, int port) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    ctx_ = redisConnect(host.c_str(), port);
-    if (!ctx_ || ctx_->err) {
-        spdlog::error("Redis connect failed: {}",
-                      ctx_ ? ctx_->errstr : "allocation failed");
-        close();
+redisContext* RedisClient::createConnection(const std::string& host, int port) {
+    redisContext* ctx = redisConnect(host.c_str(), port);
+    if (!ctx || ctx->err) {
+        spdlog::error("redisConnect failed: {}",
+                      ctx ? ctx->errstr : "out of memory");
+        if (ctx) redisFree(ctx);
+        return nullptr;
+    }
+    return ctx;
+}
+
+void RedisClient::destroyConnection(redisContext* ctx) {
+    if (ctx) redisFree(ctx);
+}
+
+bool RedisClient::connect(const std::string& host, int port, int pool_size) {
+    host_ = host;
+    port_ = port;
+    pool_size_ = pool_size;
+
+    try {
+        pool_ = std::make_unique<ConnectionPool<redisContext*>>(
+            pool_size_,
+            [this] { return createConnection(host_, port_); },
+            destroyConnection);
+        connected_ = true;
+        spdlog::info("Redis pool: {} connections to {}:{}", pool_size_, host_, port_);
+        return true;
+    } catch (const std::exception& e) {
+        spdlog::error("Redis pool creation failed: {}", e.what());
         return false;
     }
-    spdlog::info("Redis connected to {}:{}", host, port);
-    return true;
 }
 
 void RedisClient::close() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (ctx_) {
-        redisFree(ctx_);
-        ctx_ = nullptr;
-    }
+    connected_ = false;
+    pool_.reset();
 }
 
 bool RedisClient::isConnected() const noexcept {
-    return ctx_ != nullptr;
+    return connected_;
 }
 
-// ---- helpers ----
-
-bool RedisClient::checkReply(redisReply* reply, int expected_type) {
-    if (!reply) return false;
-    bool ok = (reply->type == expected_type);
-    if (!ok && reply->type == REDIS_REPLY_ERROR) {
-        spdlog::warn("Redis error: {}", reply->str);
+bool RedisClient::checkReply(redisReply* reply, int expected_type, redisContext* ctx) {
+    if (!reply) {
+        spdlog::error("Redis reply null: {}", ctx->errstr);
+        return false;
     }
-    freeReplyObject(reply);
-    return ok;
+    if (reply->type == REDIS_REPLY_ERROR) {
+        spdlog::error("Redis error: {}", reply->str);
+        freeReplyObject(reply);
+        return false;
+    }
+    if (expected_type >= 0 && reply->type != expected_type) {
+        spdlog::error("Redis unexpected reply type {} (expected {})",
+                      reply->type, expected_type);
+        freeReplyObject(reply);
+        return false;
+    }
+    return true;
 }
 
 std::string RedisClient::makeKey(const std::string& prefix, uint64_t id) {
-    std::ostringstream oss;
-    oss << prefix << ":" << id;
-    return oss.str();
+    return prefix + ":" + std::to_string(id);
 }
 
-// ---- Generic ops ----
+// ── Generic commands ──────────────────────────────────────────────
 
 bool RedisClient::set(const std::string& key, const std::string& value) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
     auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "SET %s %b", key.c_str(), value.data(), value.size()));
-    return checkReply(reply);
+        redisCommand(ctx, "SET %s %s", key.c_str(), value.c_str()));
+    bool ok = checkReply(reply, REDIS_REPLY_STATUS, ctx);
+    if (reply) freeReplyObject(reply);
+    return ok;
 }
 
 bool RedisClient::setEx(const std::string& key, int ttl_sec, const std::string& value) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
     auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "SETEX %s %d %b", key.c_str(), ttl_sec,
-                     value.data(), value.size()));
-    return checkReply(reply);
+        redisCommand(ctx, "SETEX %s %d %s", key.c_str(), ttl_sec, value.c_str()));
+    bool ok = checkReply(reply, REDIS_REPLY_STATUS, ctx);
+    if (reply) freeReplyObject(reply);
+    return ok;
 }
 
 std::optional<std::string> RedisClient::get(const std::string& key) {
-    auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "GET %s", key.c_str()));
-    if (!reply) return std::nullopt;
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
+    auto* reply = static_cast<redisReply*>(
+        redisCommand(ctx, "GET %s", key.c_str()));
+    if (!checkReply(reply, -1, ctx)) {
+        if (reply) freeReplyObject(reply);
+        return std::nullopt;
+    }
     if (reply->type == REDIS_REPLY_NIL) {
         freeReplyObject(reply);
         return std::nullopt;
@@ -83,36 +117,48 @@ std::optional<std::string> RedisClient::get(const std::string& key) {
 }
 
 bool RedisClient::del(const std::string& key) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "DEL %s", key.c_str()));
-    return checkReply(reply, REDIS_REPLY_INTEGER);
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
+    auto* reply = static_cast<redisReply*>(
+        redisCommand(ctx, "DEL %s", key.c_str()));
+    if (reply) freeReplyObject(reply);
+    return true;
 }
 
 bool RedisClient::expire(const std::string& key, int ttl_sec) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
     auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "EXPIRE %s %d", key.c_str(), ttl_sec));
-    return checkReply(reply, REDIS_REPLY_INTEGER);
-}
-
-bool RedisClient::exists(const std::string& key) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "EXISTS %s", key.c_str()));
-    if (!reply) return false;
-    bool ok = (reply->type == REDIS_REPLY_INTEGER && reply->integer > 0);
-    freeReplyObject(reply);
+        redisCommand(ctx, "EXPIRE %s %d", key.c_str(), ttl_sec));
+    bool ok = checkReply(reply, REDIS_REPLY_INTEGER, ctx);
+    if (reply) freeReplyObject(reply);
     return ok;
 }
 
-// ---- List ops ----
+bool RedisClient::exists(const std::string& key) {
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
+    auto* reply = static_cast<redisReply*>(
+        redisCommand(ctx, "EXISTS %s", key.c_str()));
+    if (!checkReply(reply, REDIS_REPLY_INTEGER, ctx)) {
+        if (reply) freeReplyObject(reply);
+        return false;
+    }
+    bool exists = reply->integer == 1;
+    freeReplyObject(reply);
+    return exists;
+}
+
+// ── List operations ───────────────────────────────────────────────
 
 int64_t RedisClient::lpush(const std::string& key, const std::string& value) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
     auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "LPUSH %s %b", key.c_str(), value.data(), value.size()));
-    if (!reply || reply->type != REDIS_REPLY_INTEGER) {
+        redisCommand(ctx, "LPUSH %s %s", key.c_str(), value.c_str()));
+    if (!checkReply(reply, REDIS_REPLY_INTEGER, ctx)) {
         if (reply) freeReplyObject(reply);
-        return -1;
+        return 0;
     }
     int64_t len = reply->integer;
     freeReplyObject(reply);
@@ -120,10 +166,15 @@ int64_t RedisClient::lpush(const std::string& key, const std::string& value) {
 }
 
 std::optional<std::string> RedisClient::brpop(const std::string& key, int timeout_sec) {
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
     auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "BRPOP %s %d", key.c_str(), timeout_sec));
-    if (!reply) return std::nullopt;
-    if (reply->type == REDIS_REPLY_NIL || reply->type != REDIS_REPLY_ARRAY || reply->elements < 2) {
+        redisCommand(ctx, "BRPOP %s %d", key.c_str(), timeout_sec));
+    if (!checkReply(reply, REDIS_REPLY_ARRAY, ctx)) {
+        if (reply) freeReplyObject(reply);
+        return std::nullopt;
+    }
+    if (reply->elements < 2) {
         freeReplyObject(reply);
         return std::nullopt;
     }
@@ -133,9 +184,11 @@ std::optional<std::string> RedisClient::brpop(const std::string& key, int timeou
 }
 
 int64_t RedisClient::llen(const std::string& key) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    auto* reply = static_cast<redisReply*>(redisCommand(ctx_, "LLEN %s", key.c_str()));
-    if (!reply || reply->type != REDIS_REPLY_INTEGER) {
+    auto guard = pool_->borrow();
+    redisContext* ctx = *guard;
+    auto* reply = static_cast<redisReply*>(
+        redisCommand(ctx, "LLEN %s", key.c_str()));
+    if (!checkReply(reply, REDIS_REPLY_INTEGER, ctx)) {
         if (reply) freeReplyObject(reply);
         return 0;
     }
@@ -144,10 +197,9 @@ int64_t RedisClient::llen(const std::string& key) {
     return len;
 }
 
-// ---- Domain helpers ----
+// ── Session helpers ───────────────────────────────────────────────
 
 void RedisClient::setSession(uint64_t session_id, const std::string& data, int ttl_sec) {
-    std::lock_guard<std::mutex> lock(mtx_);
     setEx(makeKey("session", session_id), ttl_sec, data);
 }
 
@@ -156,13 +208,13 @@ std::optional<std::string> RedisClient::getSession(uint64_t session_id) {
 }
 
 void RedisClient::delSession(uint64_t session_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
     del(makeKey("session", session_id));
 }
 
+// ── Online status ─────────────────────────────────────────────────
+
 void RedisClient::setOnline(uint64_t player_id, uint64_t session_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    setEx(makeKey("online", player_id), 3600, std::to_string(session_id));
+    set(makeKey("online", player_id), std::to_string(session_id));
 }
 
 std::optional<uint64_t> RedisClient::getOnline(uint64_t player_id) {
@@ -172,28 +224,29 @@ std::optional<uint64_t> RedisClient::getOnline(uint64_t player_id) {
 }
 
 void RedisClient::delOnline(uint64_t player_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
     del(makeKey("online", player_id));
 }
 
+// ── Match queue ───────────────────────────────────────────────────
+
 void RedisClient::pushMatchQueue(int mode, uint64_t player_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    lpush(makeKey("match_queue", mode), std::to_string(player_id));
+    lpush("match_queue:" + std::to_string(mode), std::to_string(player_id));
 }
 
 std::optional<uint64_t> RedisClient::popMatchQueue(int mode, int timeout_sec) {
-    auto val = brpop(makeKey("match_queue", mode), timeout_sec);
+    auto val = brpop("match_queue:" + std::to_string(mode), timeout_sec);
     if (!val) return std::nullopt;
     return std::stoull(*val);
 }
 
 int RedisClient::matchQueueSize(int mode) {
-    return static_cast<int>(llen(makeKey("match_queue", mode)));
+    return static_cast<int>(llen("match_queue:" + std::to_string(mode)));
 }
 
+// ── Room routing ──────────────────────────────────────────────────
+
 void RedisClient::setRoomRoute(uint64_t room_id, const std::string& addr) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    setEx(makeKey("room", room_id), 3600, addr);
+    set(makeKey("room", room_id), addr);
 }
 
 std::optional<std::string> RedisClient::getRoomRoute(uint64_t room_id) {
@@ -201,8 +254,19 @@ std::optional<std::string> RedisClient::getRoomRoute(uint64_t room_id) {
 }
 
 void RedisClient::delRoomRoute(uint64_t room_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
     del(makeKey("room", room_id));
+}
+
+// ── Player cache ──────────────────────────────────────────────────
+
+void RedisClient::cachePlayer(const std::string& username, uint64_t player_id) {
+    set("player:" + username, std::to_string(player_id));
+}
+
+std::optional<uint64_t> RedisClient::getCachedPlayer(const std::string& username) {
+    auto val = get("player:" + username);
+    if (!val) return std::nullopt;
+    return std::stoull(*val);
 }
 
 }  // namespace miniarena

@@ -1,5 +1,6 @@
 #pragma once
-
+#include <mutex>
+#include <queue>
 #include <sys/epoll.h>
 #include <atomic>
 #include <functional>
@@ -58,15 +59,19 @@ public:
     void setHeartbeatInterval(uint64_t ms) { heartbeat_ms_ = ms; }
     void setTimeout(uint64_t ms)          { timeout_ms_ = ms; }
 
-private:
     static constexpr int kMaxEvents = 1024;
 
+    void addConnectionImpl(std::unique_ptr<Connection> conn);
+    void drainPending();
     void handleEvents(const epoll_event* events, int n);
     void checkTimeouts(uint64_t now_ms);
     void cleanupClosed();
-
     int epfd_;
-    int wake_fd_;  // eventfd for cross-thread wake
+    int wake_fd_;
+
+    // Thread-safe pending connection queue (filled by Acceptor thread)
+    std::queue<std::unique_ptr<Connection>> pending_conns_;
+    mutable std::mutex pending_mtx_;
 
     std::unordered_map<ConnectionId, std::unique_ptr<Connection>> conns_;
     std::unordered_map<int, ConnectionId> fd_to_id_;

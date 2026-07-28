@@ -38,12 +38,19 @@ EventLoop::~EventLoop() {
 }
 
 void EventLoop::addConnection(std::unique_ptr<Connection> conn) {
+    {
+        std::lock_guard<std::mutex> lock(pending_mtx_);
+        pending_conns_.push(std::move(conn));
+    }
+    wake();
+}
+
+void EventLoop::addConnectionImpl(std::unique_ptr<Connection> conn) {
     int fd = conn->fd();
     ConnectionId id = conn->id();
 
-    // Register fd for EPOLLIN edge-triggered
     epoll_event ev{};
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN;
     ev.data.fd = fd;
     if (epoll_ctl(epfd_, EPOLL_CTL_ADD, fd, &ev) < 0) {
         spdlog::error("epoll_ctl ADD fd {} failed: {}", fd, strerror(errno));
@@ -53,9 +60,7 @@ void EventLoop::addConnection(std::unique_ptr<Connection> conn) {
 
     fd_to_id_[fd] = id;
 
-    // Add heartbeat timer
     timer_wheel_.add(id, heartbeat_ms_, [this](ConnectionId cid) {
-        // Heartbeat timeout: if still connected, close
         auto it = conns_.find(cid);
         if (it != conns_.end()) {
             spdlog::debug("conn {}: heartbeat timeout", cid);
@@ -67,6 +72,16 @@ void EventLoop::addConnection(std::unique_ptr<Connection> conn) {
     conns_[id] = std::move(conn);
 }
 
+void EventLoop::drainPending() {
+    std::unique_lock<std::mutex> lock(pending_mtx_);
+    while (!pending_conns_.empty()) {
+        auto conn = std::move(pending_conns_.front());
+        pending_conns_.pop();
+        lock.unlock();
+        addConnectionImpl(std::move(conn));
+        lock.lock();
+    }
+}
 void EventLoop::closeConnection(ConnectionId id) {
     auto it = conns_.find(id);
     if (it == conns_.end()) return;
@@ -129,6 +144,7 @@ void EventLoop::run() {
             break;
         }
 
+        drainPending();
         handleEvents(events, n);
 
         uint64_t now_ms = std::chrono::duration_cast<Milliseconds>(

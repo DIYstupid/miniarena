@@ -46,24 +46,41 @@ LoginResult SessionManager::login(ConnectionId conn_id,
     // silent in production
     LoginResult result;
 
-    auto player = mysql_->getPlayer(username);
+    // 1. Try Redis player cache first
+    auto cached_pid = redis_->getCachedPlayer(username);
+    std::optional<PlayerRecord> player;
+
+    if (cached_pid) {
+        // Cache hit — fetch from MySQL for full record (password check needs it)
+        player = mysql_->getPlayer(username);
+    }
+
     if (!player) {
-        // Auto-register (simplified; real impl would hash password)
-        uint64_t pid = mysql_->createPlayer(username, password);
-        if (pid == 0) {
-            result.error_code = 20001;
-            result.error_msg = "Failed to create player";
-            return result;
-        }
+        // Cache miss or stale — MySQL lookup
         player = mysql_->getPlayer(username);
         if (!player) {
-            result.error_code = 20001;
-            result.error_msg = "Player creation failed";
-            return result;
+            // Auto-register
+            uint64_t pid = mysql_->createPlayer(username, password);
+            if (pid == 0) {
+                result.error_code = 20001;
+                result.error_msg = "Failed to create player";
+                return result;
+            }
+            // Cache the new player in Redis
+            redis_->cachePlayer(username, pid);
+            player = mysql_->getPlayer(username);
+            if (!player) {
+                result.error_code = 20001;
+                result.error_msg = "Player creation failed";
+                return result;
+            }
+        } else {
+            // Found via MySQL — populate Redis cache
+            redis_->cachePlayer(username, player->id);
         }
     }
 
-    // 2. Verify password (plaintext for P3; hash comparison in production)
+    // 2. Verify password
     if (player->password_hash != password) {
         result.error_code = 20001;
         result.error_msg = "Invalid password";
@@ -84,18 +101,12 @@ LoginResult SessionManager::login(ConnectionId conn_id,
     s.login_time = Clock::now();
     s.last_active = s.login_time;
 
-    // 5. Store in maps
     sessions_[sid] = s;
     conn_map_[conn_id] = sid;
     player_map_[player->id] = sid;
 
-    // 6. Save to Redis
     saveToRedis(s);
-
-    // 7. Record login
     mysql_->recordLogin(player->id);
-
-    // silent in production
 
     result.error_code = 0;
     result.session_id = sid;

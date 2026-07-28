@@ -1,16 +1,17 @@
 #pragma once
 
 #include <mysql/mysql.h>
+#include <memory>
 #include <optional>
 #include <string>
 #include <cstdint>
-#include <mutex>
 
+#include "connection_pool.h"
 #include "game/player.h"
 
 namespace miniarena {
 
-// Thin RAII wrapper around MySQL C API.
+// RAII wrapper around a MySQL connection pool.
 class MysqlClient {
 public:
     MysqlClient() = default;
@@ -21,38 +22,35 @@ public:
 
     bool connect(const std::string& host, int port,
                  const std::string& user, const std::string& pass,
-                 const std::string& db);
+                 const std::string& db, int pool_size = 4);
 
     void close();
     [[nodiscard]] bool isConnected() const noexcept;
 
-    // Execute a raw query. Returns true on success.
     bool execute(const std::string& sql);
-
-    // Escaped string for safe interpolation.
     std::string escape(const std::string& str);
 
-    // --- Player operations ---
     std::optional<PlayerRecord> getPlayer(const std::string& username);
     uint64_t createPlayer(const std::string& username, const std::string& password_hash);
-
-    // --- Login records ---
     void recordLogin(uint64_t player_id);
-
-    // --- Battle records (P4) ---
     void saveBattleResult(uint64_t player_id, uint64_t room_id,
                           int kills, int deaths, int damage_dealt,
                           int damage_taken, int rank);
-
-    // --- Schema init ---
     void ensureSchema();
 
-    // Access underlying handle if needed
-    [[nodiscard]] MYSQL* handle() noexcept { return conn_; }
-
 private:
-    MYSQL* conn_ = nullptr;
-    mutable std::recursive_mutex mtx_;
+    static MYSQL* createConnection(const std::string& host, int port,
+                                   const std::string& user, const std::string& pass,
+                                   const std::string& db);
+    static void destroyConnection(MYSQL* conn);
+
+    std::unique_ptr<ConnectionPool<MYSQL*>> pool_;
+    bool connected_ = false;
+
+    // Connection params saved for pool creation
+    std::string host_, user_, pass_, db_;
+    int port_ = 3306;
+    int pool_size_ = 4;
 };
 
 }  // namespace miniarena
