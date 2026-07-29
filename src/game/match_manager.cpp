@@ -34,38 +34,41 @@ int MatchManager::leaveQueue(PlayerId player_id) {
 }
 
 RoomId MatchManager::tryMatch(int mode) {
-    int count = redis_->matchQueueSize(mode);
-    if (count < room_size_) return 0;
-    // Create room
-    RoomId room_id = rooms_->createRoom(room_size_);
-    spdlog::info("Match formed: room {} with {} players", room_id, room_size_);
+    // Batch-create rooms until queue is below room_size
+    int total_formed = 0;
+    while (true) {
+        int count = redis_->matchQueueSize(mode);
+        if (count < room_size_) break;
 
-    // Pop players and add to room
-    for (int i = 0; i < room_size_; ++i) {
-        auto pid_opt = redis_->popMatchQueue(mode);
-        if (!pid_opt) break;
+        RoomId room_id = rooms_->createRoom(room_size_);
+        spdlog::info("Match formed: room {} with {} players (total rooms: {})",
+                     room_id, room_size_, total_formed + 1);
 
-        PlayerId pid = *pid_opt;
-        auto* s = sessions_->getByPlayer(pid);
-        if (!s) continue;
+        for (int i = 0; i < room_size_; ++i) {
+            auto pid_opt = redis_->popMatchQueue(mode);
+            if (!pid_opt) break;
 
-        rooms_->getRoom(room_id)->addPlayer(pid, s->username);
-        sessions_->setState(s->session_id, SessionState::IN_ROOM);
-        sessions_->setCurrentRoom(s->session_id, room_id);
+            PlayerId pid = *pid_opt;
+            auto* s = sessions_->getByPlayer(pid);
+            if (!s) continue;
 
-        // Notify player
-        miniarena::MatchSuccessNotify notify;
-        notify.set_room_id(room_id);
-        notify.set_server_addr("127.0.0.1:9000");
-        std::string data;
-        notify.SerializeToString(&data);
+            rooms_->getRoom(room_id)->addPlayer(pid, s->username);
+            sessions_->setState(s->session_id, SessionState::IN_ROOM);
+            sessions_->setCurrentRoom(s->session_id, room_id);
 
-        if (notify_cb_) {
-            notify_cb_(pid, 2004, data);
+            miniarena::MatchSuccessNotify notify;
+            notify.set_room_id(room_id);
+            notify.set_server_addr("127.0.0.1:9000");
+            std::string data;
+            notify.SerializeToString(&data);
+
+            if (notify_cb_) {
+                notify_cb_(pid, 2004, data);
+            }
         }
+        ++total_formed;
     }
-
-    return room_id;
+    return total_formed;
 }
 
 }  // namespace miniarena
