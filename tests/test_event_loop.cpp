@@ -37,6 +37,7 @@ TEST_F(EventLoopTest, AddConnectionIncrementsCount) {
     auto [server, client] = makePair();
     auto conn = std::make_unique<Connection>(1, std::move(server));
     loop_->addConnection(std::move(conn));
+    loop_->drainPending();  // P7: async enqueue, must drain first
     EXPECT_EQ(loop_->connectionCount(), 1);
 }
 
@@ -44,19 +45,18 @@ TEST_F(EventLoopTest, CloseConnectionRemovesIt) {
     auto [server, client] = makePair();
     auto conn = std::make_unique<Connection>(1, std::move(server));
     loop_->addConnection(std::move(conn));
+    loop_->drainPending();
     EXPECT_EQ(loop_->connectionCount(), 1);
 
     loop_->closeConnection(1);
-    // Connection should be marked CLOSING, still in map until cleanup
-    // (cleanup happens in run loop, not here)
+    // Connection marked CLOSING — removed in cleanupClosed() during run()
 }
 
 TEST_F(EventLoopTest, EnableAndDisableWrite) {
     auto [server, client] = makePair();
     auto conn = std::make_unique<Connection>(1, std::move(server));
     loop_->addConnection(std::move(conn));
-
-    // These should not crash
+    loop_->drainPending();
     loop_->enableWrite(1);
     loop_->disableWrite(1);
 }

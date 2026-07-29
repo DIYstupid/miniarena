@@ -59,10 +59,11 @@ public:
     void setHeartbeatInterval(uint64_t ms) { heartbeat_ms_ = ms; }
     void setTimeout(uint64_t ms)          { timeout_ms_ = ms; }
 
+    // Drain pending connections and writes (for testing / explicit flush)
+    void drainPending();
     static constexpr int kMaxEvents = 1024;
 
     void addConnectionImpl(std::unique_ptr<Connection> conn);
-    void drainPending();
     void drainPendingWrites();
     void handleEvents(const epoll_event* events, int n);
     void checkTimeouts(uint64_t now_ms);
