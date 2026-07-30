@@ -28,8 +28,22 @@ void LogicWorker::run() {
             now - last_tick).count();
 
         if (elapsed >= TickEngine::kTickIntervalMs) {
+            auto t0 = std::chrono::steady_clock::now();
             tick();
+            auto t1 = std::chrono::steady_clock::now();
             last_tick = now;
+            int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+            tick_durations_.push_back(us);
+            if (++tick_count_ % 200 == 0) {
+                auto cp = tick_durations_;
+                std::sort(cp.begin(), cp.end());
+                size_t n = cp.size();
+                char buf[128];
+                snprintf(buf, sizeof(buf), "Tick[%ld] P50=%ldus P95=%ldus P99=%ldus Max=%ldus\n",
+                         tick_count_, cp[n*50/100], cp[n*95/100], cp[n*99/100], cp.back());
+                write(2, buf, strlen(buf));
+                tick_durations_.clear();
+            }
         }
 
         auto remaining = TickEngine::kTickIntervalMs - elapsed;

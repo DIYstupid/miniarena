@@ -8,6 +8,7 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include <variant>
+#include <vector>
 
 #include "player.h"
 #include "room.h"
@@ -65,15 +66,19 @@ public:
     [[nodiscard]] int id() const noexcept { return id_; }
     [[nodiscard]] size_t roomCount() const noexcept { return rooms_.size(); }
 
+    // Drain pending room operations (public for BattleManager thread start)
+    void drainPendingOps();
+    void reportTickStats();
+
 private:
     void tick();
-    void drainPendingOps();
 
     int id_;
     std::atomic<bool> running_{false};
     std::thread thread_;
 
-    // Thread-safe pending ops (filled by external threads, drained by LogicWorker)
+    std::vector<int64_t> tick_durations_;
+    int64_t tick_count_ = 0;
     std::queue<PendingOp> pending_ops_;
     mutable std::mutex pending_mtx_;
     std::condition_variable pending_cv_;

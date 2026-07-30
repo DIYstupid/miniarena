@@ -50,15 +50,16 @@ void BattleManager::startBattle(Room* room, SessionManager* sessions) {
     worker->addRoom(room, std::move(bp_map));
     room_to_worker_[rid] = worker;
 
-    // Start worker thread if not running
-    static std::once_flag start_flags[16];  // enough for up to 16 workers
-    // Actually, start all workers on first use
+    // Start worker thread if not running (re-check after drain)
     for (auto& w : workers_) {
-        if (w->roomCount() == 1) {
-            std::thread([&w = w]() { w->run(); }).detach();
+        if (w->roomCount() == 0) w->drainPendingOps();  // apply pending adds
+        if (w->roomCount() >= 1) {
+            static std::once_flag flags[16];
+            std::call_once(flags[w->id()], [&w = w]() {
+                std::thread([&w = w]() { w->run(); }).detach();
+            });
         }
     }
-
     // Update session states
     for (auto& [pid, info] : room->players()) {
         auto* s = sessions->getByPlayer(pid);
